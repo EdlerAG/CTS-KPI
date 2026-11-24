@@ -1,0 +1,26 @@
+# Python / venv / tests
+.venv/
+__pycache__/
+*.pyc
+.pytest_cache/
+
+# Secrets & credentials (NEVER commit)
+.env
+*.env
+*accessKeys*.csv
+*.pem
+*.key
+
+# Terraform state & local provider cache
+**/.terraform/
+*.tfstate
+*.tfstate.*
+crash.log
+*.tfvars
+
+# Runtime databases & Word lock files
+*.db
+*.db-wal
+*.db-shm
+~$*.docx
+docker-compose.override.yml

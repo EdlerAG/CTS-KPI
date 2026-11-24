@@ -1,0 +1,92 @@
+====================================================================
+ПЛАН ЗАХИСТУ — ЛАБОРАТОРНА РОБОТА 3 (МІЛСТОУН 3): РЕПЛІКАЦІЯ
+Максимум: 15 балів (10 базовий + 5 розширений)
+====================================================================
+
+0. ПІДГОТОВКА ДО ЗАХИСТУ
+--------------------------------------------------------------------
+1) Зупини контейнери інших лаб, щоб звільнити порт 8000:
+   docker ps
+2) Запусти Лабу 3 (8 контейнерів: wal-service, coordinator, 6 реплік):
+   cd "D:\Потрібне\5 курс\ХТС\Lab_3_Replication"
+   docker compose up -d --build
+3) Тримай відкритими файли:
+   - wal_service\app.py
+   - shard\app.py
+   - shard\storage.py
+   - coordinator\app.py
+   - docker-compose.yml
+
+
+1. ПОСЛІДОВНІСТЬ ДЕМОНСТРАЦІЇ ТА КОМАНДИ В POWERSHELL
+--------------------------------------------------------------------
+Крок А. Показати набір із 3 реплік на кожен шард (2 бали):
+  Invoke-RestMethod http://localhost:8000/shards | ConvertTo-Json -Depth 4
+  # Має показати для shard-1 і shard-2 по 3 здорові репліки: leader + follower-1 + follower-2.
+
+Крок Б. Створити таблицю, записати дані через лідера в append-only WAL і показати реплікацію (6 балів):
+  Invoke-RestMethod -Method Post http://localhost:8000/tables -ContentType "application/json" -Body '{"name":"users","partition_key":"user_id"}'
+  Invoke-RestMethod -Method Post "http://localhost:8000/tables/users/records?w=2" -ContentType "application/json" -Body '{"partition_key":"alice","value":{"role":"admin"}}'
+  Invoke-RestMethod -Method Post "http://localhost:8000/tables/users/records?w=2" -ContentType "application/json" -Body '{"partition_key":"bob","value":{"role":"viewer"}}'
+
+  # Показати сам фізичний append-only лог у контейнері wal-service (зверни увагу на offset):
+  docker exec lab3-wal-service sh -c "cat /logs/*.jsonl"
+
+Крок В. Показати розподіл читань по ВСІХ живих репліках, а не тільки на лідера (2 бали):
+  1..4 | ForEach-Object { Invoke-RestMethod "http://localhost:8000/tables/users/records/alice?r=1" } | Format-Table selected_replica, shard_id, version
+  # У колонці selected_replica по черзі зʼявляються leader, follower-1, follower-2!
+
+Крок Г. Демо відмови, кворуму R + W > N та збереженого offset фолловера (4 бали):
+  # 1) Зупиняємо по 1 фолловеру на кожному шарді (залишається 2 з 3 реплік -> кворум W=2, R=2 ще працює!):
+  docker compose stop shard-1-follower-1 shard-2-follower-1
+  Start-Sleep -Seconds 3
+
+  # Пишемо новий запис при впалому фолловері (W=2 проходить, бо живі leader + follower-2):
+  Invoke-RestMethod -Method Post "http://localhost:8000/tables/users/records?w=2" -ContentType "application/json" -Body '{"partition_key":"alice","value":{"role":"superadmin"}}'
+
+  # Читання з r=2 працює без втрати даних і повертає нову версію:
+  Invoke-RestMethod "http://localhost:8000/tables/users/records/alice?r=2"
+
+  # Якщо зупинити ДРУГОГО фолловера (залишиться 1/3 репліка), кворум W=2 чесно впаде з 503:
+  docker compose stop shard-1-follower-2 shard-2-follower-2
+  try { Invoke-RestMethod -Method Post "http://localhost:8000/tables/users/records?w=2" -ContentType "application/json" -Body '{"partition_key":"alice","value":{"role":"fail"}}' } catch { $_.Exception.Response.StatusCode }
+
+  # 2) Піднімаємо фолловерів назад і показуємо, що вони досинхронізовуються з останнього offset:
+  docker compose start shard-1-follower-1 shard-1-follower-2 shard-2-follower-1 shard-2-follower-2
+  Start-Sleep -Seconds 3
+  Invoke-RestMethod http://localhost:8000/shards | ConvertTo-Json -Depth 4
+  # У всіх реплік offset зрівнявся! (Покажи таблицю replication_state у SQLite через shard\storage.py).
+
+Крок Д. Навантажувальний тест до і після кворумної реплікації (1 бал) + Юніт-тести:
+  ..\.venv\Scripts\python.exe scripts\load_test.py
+  ..\.venv\Scripts\pytest.exe -v tests\test_replication.py
+
+
+2. ЩО РОЗКАЗУВАТИ ПРИ ПОЯСНЕННІ КОДУ
+--------------------------------------------------------------------
+- `wal_service\app.py`:
+  - Кожен шард має свій файл `/logs/{shard_id}.jsonl`. При записі під `threading.Lock` обчислюється `next_offset = last + 1`, рядок дописується в кінець (`"a"`) з `flush()` і `os.fsync()` (гарантія запису на диск).
+- `shard\storage.py`:
+  - Таблиця `replication_state` зберігає `last_applied_offset`. При виклику `apply_event(offset, ...)` спочатку перевіряється `if offset <= current_offset: return False` (ідемпотентність — повторне читання того ж offset безпечне!).
+- `shard\app.py`:
+  - `_wait_for_quorum(target_offset, w, follower_urls)`: лідер уже має 1 голос (`acks = 1`). Якщо `w > 1`, у циклі опитує `/internal/status` фолловерів, поки `w - 1` з них не застосують `last_applied_offset >= target_offset`.
+  - `_follower_sync_loop`: фолловери кожні 100 мс запитують `GET /logs/{shard_id}?from_offset={last + 1}`.
+- `coordinator\app.py`:
+  - `_health_probe_loop` кожні 2 с перевіряє `/health` кожної репліки і виставляє `healthy = True/False`.
+  - `_pick_read_replicas(shard_id, r_count)` бере `healthy` репліки, рухає `read_cursors[shard_id]` (round-robin) і опитує `r_count` штук паралельно (`asyncio.gather`), вибираючи відповідь з `max(version)`.
+
+
+3. ШПАРГАЛКА НА КОНТРОЛЬНІ ПИТАННЯ
+--------------------------------------------------------------------
+1) Переваги реплікації: відмовостійкість, масштабування читань, нижча затримка географічно. Недоліки: в N разів більше ресурсів, складність, replication lag, ризик читання застарілих даних.
+2) Чому `R + W > N`: за принципом Діріхле множина з W вузлів, що підтвердили запис, і множина з R вузлів, що читаються, обовʼязково перетинаються мінімум в `(R + W - N) >= 1` вузлі -> беремо `max(version)` і гарантовано бачимо останній запис. (N=3, W=2, R=2 -> 4 > 3).
+3) З лідером vs без лідера: single-leader дає простий єдиний порядок записів, але лідер — вузьке місце; leaderless (Dynamo/Cassandra) дозволяє писати будь-куди, висока доступність запису, але треба вирішувати конфлікти (LWW/vector clocks).
+4) Append-only лог: послідовний запис на диск дуже швидкий, фіксує строгий порядок операцій для всіх реплік, дає можливість відновлення/досинхронізації з потрібного offset.
+5) Синхронне vs асинхронне: синхронне (W >= 2) підвищує надійність (дані на кількох дисках), але збільшує latency; асинхронне (W = 1) дуже швидке, але при раптовій смерті лідера останні записи можуть втратитись.
+6) Розходження даних: replication lag (фолловер не встиг дочитати WAL), network partition, падіння лідера до реплікації, split-brain (два лідери).
+
+
+4. ОЧИЩЕННЯ ПІСЛЯ ЗАХИСТУ
+--------------------------------------------------------------------
+docker compose down -v
+====================================================================

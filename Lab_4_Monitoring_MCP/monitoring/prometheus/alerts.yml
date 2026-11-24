@@ -1,0 +1,29 @@
+groups:
+  - name: kv_store_critical_alerts
+    rules:
+      - alert: NodeDown
+        expr: kv_node_up == 0
+        for: 15s
+        labels:
+          severity: critical
+        annotations:
+          summary: "Replica {{ $labels.replica_id }} ({{ $labels.shard_id }}) is DOWN"
+          description: "Вузол {{ $labels.replica_id }} недоступний більше 15 секунд."
+
+      - alert: HighP99Latency
+        expr: histogram_quantile(0.99, sum(rate(kv_http_request_duration_seconds_bucket{service="coordinator"}[1m])) by (le)) > 0.25
+        for: 30s
+        labels:
+          severity: warning
+        annotations:
+          summary: "Coordinator p99 latency > 250ms"
+          description: "Затримка p99 координатора перевищила 0.25s (поточне значення: {{ $value }}s)."
+
+      - alert: HighReplicationLag
+        expr: kv_replication_lag_seconds > 5 or kv_replication_lag_offsets > 10
+        for: 15s
+        labels:
+          severity: warning
+        annotations:
+          summary: "High replication lag on {{ $labels.replica_id }}"
+          description: "Лаг реплікації перевищив поріг (5s або 10 offsets)."

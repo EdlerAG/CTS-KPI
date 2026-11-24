@@ -1,0 +1,114 @@
+====================================================================
+ПЛАН ЗАХИСТУ — ЛАБОРАТОРНА РОБОТА 1 (МІЛСТОУН 1): ІНФРАСТРУКТУРА
+Максимум: 15 балів (10 базовий + 5 розширений)
+====================================================================
+
+0. ПІДГОТОВКА ДО ЗАХИСТУ (за 5 хвилин до показу)
+--------------------------------------------------------------------
+1) Переконайся, що ти ВИЙШОВ із root-акаунта у браузері!
+2) Увійди через IAM Identity Center (як адміністратор):
+   URL: https://d-c36751ed4e.awsapps.com/start
+   Користувач: admin-edler (попередньо активуй пароль + MFA з листа на пошті).
+   Регіон у консолі AWS: eu-north-1 (Europe (Stockholm)).
+3) Відкрий 4 вкладки в браузері (щоб не шукати під час захисту):
+   - Вкладка 1: IAM -> Dashboard / Users / Policies / Roles
+   - Вкладка 2: VPC -> Your VPCs / Subnets / Route tables / Internet gateways
+   - Вкладка 3: AWS Organizations та IAM Identity Center (eu-north-1)
+   - Вкладка 4: Billing and Cost Management -> Budgets (zero-spend-alert)
+4) Відкрий PowerShell у папці:
+   cd "D:\Потрібне\5 курс\ХТС\Lab_1_Infrastructure\terraform"
+5) Тримай відкритими у редакторі файли:
+   - terraform\iam.tf
+   - terraform\vpc.tf
+   - budget_milestone2.md
+
+
+1. ЯКІ КОМАНДИ ЗАПУСТИТИ В POWERSHELL НА ЗАХИСТІ
+--------------------------------------------------------------------
+# Перевірити, під ким ми працюємо в CLI (має бути admin-edler, НЕ root):
+aws sts get-caller-identity
+
+# Показати, що вся інфраструктура описана через IaC (Terraform):
+terraform output
+terraform plan
+# (Очікується: "No changes. Your infrastructure matches the configuration.")
+
+# Показати створені VPC, підмережі та маршрути:
+aws ec2 describe-vpcs --vpc-ids vpc-08deb24703402b608 --output table
+aws ec2 describe-subnets --filters "Name=vpc-id,Values=vpc-08deb24703402b608" --output table
+aws ec2 describe-route-tables --filters "Name=vpc-id,Values=vpc-08deb24703402b608"
+
+# Показати створену IAM-роль і read-only політику:
+aws iam get-role --role-name kpi-kv-store-readonly-role
+aws iam get-policy --policy-arn arn:aws:iam::101251450296:policy/kpi-kv-store-readonly-policy
+
+# ЖИВЕ ДЕМО AssumeRole (kv-readonly-user приймає роль -> читає OK, запис Denied):
+aws sts get-caller-identity --profile kv-readonly-assumed
+aws ec2 describe-vpcs --vpc-ids vpc-08deb24703402b608 --profile kv-readonly-assumed --output table
+aws ec2 create-vpc --cidr-block 10.99.0.0/16 --profile kv-readonly-assumed
+# (Остання команда поверне UnauthorizedOperation / AccessDenied — доказ, що запис заборонено!)
+
+
+2. ЩО ПОКАЗУВАТИ І РОЗКАЗУВАТИ ПО КОЖНОМУ ПУНКТУ (15/15)
+--------------------------------------------------------------------
+[База - 2 б] Admin IAM-користувач + MFA (не root):
+  - Покажи в IAM Dashboard: Root user has MFA, 0 активних root Access Keys.
+  - Покажи в CLI `aws sts get-caller-identity` -> user/admin-edler.
+  - Скажи: "Під root я налаштував лише MFA, бюджет-алерт та початковий вхід, далі працюю виключно під адміном".
+
+[База - 2 б] Другий користувач + Read-Only політика:
+  - Покажи в IAM -> Users -> `kv-readonly-user`.
+  - Покажи прикріплену політику `kpi-kv-store-readonly-policy` (у `terraform/iam.tf`):
+    дозволені лише `Describe*`, `List*`, `Get*` — жодних прав запису, створення чи видалення.
+  - (Якщо викладач попросить довести, що запис заборонено — покажи json політики або відкрий IAM Policy Simulator у консолі й перевір на `kv-readonly-user` дію `ec2:RunInstances` -> Denied, `ec2:DescribeVpcs` -> Allowed).
+
+[База - 2 б] IAM-роль, яку може прийняти read-only користувач:
+  - Покажи IAM -> Roles -> `kpi-kv-store-readonly-role`.
+  - Покажи вкладку Trust relationships (Principal: `arn:aws:iam::101251450296:user/kv-readonly-user`, Action: `sts:AssumeRole`).
+  - Покажи `kpi-kv-store-allow-assume-readonly-role` на користувачі `kv-readonly-user`.
+
+[База - 3 б] VPC з публічною та приватною підмережами:
+  - Покажи `vpc-08deb24703402b608` (`10.0.0.0/16`).
+  - Публічна підмережа `subnet-0988ca716f35493d6` (`10.0.1.0/24`, `eu-north-1a`): Route Table має `0.0.0.0/0 -> igw-0a4828ef6b9292c32` і `MapPublicIpOnLaunch = true`.
+  - Приватна підмережа `subnet-02efb16de18305709` (`10.0.2.0/24`, `eu-north-1b`): Route Table має ЛИШЕ `10.0.0.0/16 -> local`, жодного маршруту в інтернет.
+  - Скажи: "NAT Gateway свідомо не додавав, бо він коштує ~35$/міс навіть без трафіку".
+
+[База - 1 б] Бюджет Мілстоуна 2:
+  - Відкрий `budget_milestone2.md` і коротко назви: 1 координатор + 2 шарди (`t3.micro` + 8GB gp3 + публічний IP для координатора) ≈ $30/міс 24/7 On-Demand (або ~$0-5/міс за Free Tier / локальному Docker Compose).
+  - Покажи в консолі створений `zero-spend-alert` у AWS Budgets.
+
+[Розширене - 1 б] IAM Identity Center:
+  - Покажи увімкнений інстанс `ssoins-650893b8f2a27357` у `eu-north-1`, користувача `admin-edler` і Permission Set `AdministratorAccess` на акаунт `101251450296`.
+
+[Розширене - 1 б] AWS Organization:
+  - Покажи AWS Organizations -> організація `o-pgdvxqzrq1`, Root OU `r-3zay`, акаунт `Edler (101251450296)` всередині.
+
+[Розширене - 3 б] IaC для IAM (+1) та мережі (+2):
+  - Покажи `terraform/iam.tf` і `terraform/vpc.tf`, а в терміналі — `terraform plan` (No changes).
+
+
+3. ЩО ПОЯСНЮВАТИ В КОДІ (якщо тицьне викладач)
+--------------------------------------------------------------------
+- `iam.tf`:
+  - `aws_iam_policy.readonly_policy` — дозволяє лише `ec2:Describe*`, `iam:Get*`, `iam:List*` тощо, бо в AWS діє implicit deny на все, що не дозволено явно.
+  - `assume_role_policy` у `aws_iam_role.readonly_role` — це trust policy, яка відповідає на питання "ХТО може одягти цю роль" (лише `kv-readonly-user`), а `role_policy_attachment` — "ЩО ця роль може робити".
+- `vpc.tf`:
+  - `data "aws_availability_zones" "available"` — бере дві різні AZ (`names[0]` та `names[1]`) для публічної та приватної підмереж.
+  - Різниця між `public` і `private` — виключно у привʼязаній `aws_route_table` (наявність чи відсутність маршруту `0.0.0.0/0 -> IGW`).
+
+
+4. ШПАРГАЛКА НА КОНТРОЛЬНІ ПИТАННЯ
+--------------------------------------------------------------------
+1) *aaS: IaaS (EC2 — дають залізо/мережу, ОС наша), PaaS (RDS/Beanstalk — дають платформу, наш тільки код), SaaS (Gmail/Datadog — готовий продукт), FaaS (Lambda — функції на події, оплата за мс).
+2) Регіони (географія, пінг, GDPR, ціна) та AZ (ізольовані дата-центри в одному регіоні для відмовостійкості).
+3) IaC: інфраструктура в коді (Git, повторюваність, `plan`/`destroy`, без ручного дрейфу конфігурацій).
+4) Група (постійна сукупність юзерів зі спільними правами) vs Роль (тимчасова ідентичність без пароля, яку приймають через `sts:AssumeRole` з тимчасовими токенами — юзери або сервіси AWS).
+5) CIDR: `/16` = 2^16 = 65 536 IP; `/24` = 2^8 = 256 IP, але AWS резервує 5 адрес у кожній підмережі (.0 мережа, .1 роутер, .2 DNS, .3 резерв, .255 broadcast) -> залишається 251 IP.
+6) Публічна підмережа маршрутизує `0.0.0.0/0 -> IGW`, приватна має лише локальний маршрут `10.0.0.0/16 -> local` (вихід в інтернет можливий лише через NAT Gateway в публічній підмережі).
+7) Allow — видача мінімальних прав; Explicit Deny — жорсткий запобіжник (перекриває будь-який Allow, наприклад у SCP чи забороні роботи без MFA).
+
+
+5. ПІСЛЯ ЗАХИСТУ (коли весь курс зданий)
+--------------------------------------------------------------------
+- Вимкнути IAM Identity Center, видалити Organization, виконати `terraform destroy` у `terraform\`, за бажанням видалити Access Key для `admin-edler`.
+====================================================================

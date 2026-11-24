@@ -1,0 +1,55 @@
+services:
+  coordinator:
+    build: ./coordinator
+    container_name: lab2-coordinator
+    ports:
+      - "8000:8000"
+    environment:
+      SHARDING_STRATEGY: "consistent"
+      VNODES_PER_SHARD: "100"
+
+  shard-1:
+    build: ./shard
+    container_name: lab2-shard-1
+    depends_on:
+      - coordinator
+    environment:
+      SHARD_ID: "shard-1"
+      SHARD_URL: "http://shard-1:8001"
+      COORDINATOR_URL: "http://coordinator:8000"
+      DB_PATH: "/data/shard.db"
+    volumes:
+      - shard1_data:/data
+
+  shard-2:
+    build: ./shard
+    container_name: lab2-shard-2
+    depends_on:
+      - coordinator
+    environment:
+      SHARD_ID: "shard-2"
+      SHARD_URL: "http://shard-2:8001"
+      COORDINATOR_URL: "http://coordinator:8000"
+      DB_PATH: "/data/shard.db"
+    volumes:
+      - shard2_data:/data
+
+  # Демо додавання 3-го шарда: docker compose --profile scale up -d shard-3
+  shard-3:
+    build: ./shard
+    container_name: lab2-shard-3
+    profiles: ["scale"]
+    depends_on:
+      - coordinator
+    environment:
+      SHARD_ID: "shard-3"
+      SHARD_URL: "http://shard-3:8001"
+      COORDINATOR_URL: "http://coordinator:8000"
+      DB_PATH: "/data/shard.db"
+    volumes:
+      - shard3_data:/data
+
+volumes:
+  shard1_data:
+  shard2_data:
+  shard3_data:

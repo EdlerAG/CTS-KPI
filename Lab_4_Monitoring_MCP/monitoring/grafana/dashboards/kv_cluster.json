@@ -1,0 +1,74 @@
+{
+  "title": "KV Store Cluster Dashboard (Lab 4)",
+  "uid": "kv-store-lab4",
+  "schemaVersion": 39,
+  "version": 1,
+  "refresh": "5s",
+  "time": { "from": "now-15m", "to": "now" },
+  "panels": [
+    {
+      "id": 1,
+      "type": "stat",
+      "title": "Стан кластера (Up/Down по репліках)",
+      "gridPos": { "h": 6, "w": 12, "x": 0, "y": 0 },
+      "targets": [
+        { "expr": "kv_node_up", "legendFormat": "{{replica_id}} ({{role}})" }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "mappings": [
+            { "type": "value", "options": { "0": { "text": "DOWN", "color": "red" }, "1": { "text": "UP", "color": "green" } } }
+          ]
+        }
+      }
+    },
+    {
+      "id": 2,
+      "type": "bargauge",
+      "title": "Розподіл ключів по шардах (лідери)",
+      "gridPos": { "h": 6, "w": 12, "x": 12, "y": 0 },
+      "targets": [
+        { "expr": "kv_shard_keys_count{role=\"leader\"}", "legendFormat": "{{shard_id}}" }
+      ]
+    },
+    {
+      "id": 3,
+      "type": "timeseries",
+      "title": "Затримка координатора p50 / p95 / p99 (сек)",
+      "gridPos": { "h": 8, "w": 12, "x": 0, "y": 6 },
+      "targets": [
+        { "expr": "histogram_quantile(0.50, sum(rate(kv_http_request_duration_seconds_bucket{service=\"coordinator\"}[1m])) by (le))", "legendFormat": "p50" },
+        { "expr": "histogram_quantile(0.95, sum(rate(kv_http_request_duration_seconds_bucket{service=\"coordinator\"}[1m])) by (le))", "legendFormat": "p95" },
+        { "expr": "histogram_quantile(0.99, sum(rate(kv_http_request_duration_seconds_bucket{service=\"coordinator\"}[1m])) by (le))", "legendFormat": "p99" }
+      ]
+    },
+    {
+      "id": 4,
+      "type": "timeseries",
+      "title": "Пропускна здатність (RPS) та помилки",
+      "gridPos": { "h": 8, "w": 12, "x": 12, "y": 6 },
+      "targets": [
+        { "expr": "sum(rate(kv_http_requests_total{service=\"coordinator\"}[1m]))", "legendFormat": "Total RPS" },
+        { "expr": "sum(rate(kv_http_errors_total{service=\"coordinator\"}[1m]))", "legendFormat": "Errors/s" }
+      ]
+    },
+    {
+      "id": 5,
+      "type": "timeseries",
+      "title": "Лаг реплікації (offsets)",
+      "gridPos": { "h": 7, "w": 12, "x": 0, "y": 14 },
+      "targets": [
+        { "expr": "kv_replication_lag_offsets", "legendFormat": "{{replica_id}}" }
+      ]
+    },
+    {
+      "id": 6,
+      "type": "timeseries",
+      "title": "Лаг реплікації (секунди)",
+      "gridPos": { "h": 7, "w": 12, "x": 12, "y": 14 },
+      "targets": [
+        { "expr": "kv_replication_lag_seconds", "legendFormat": "{{replica_id}}" }
+      ]
+    }
+  ]
+}

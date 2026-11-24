@@ -1,0 +1,216 @@
+services:
+  wal-service:
+    build: ./wal_service
+    container_name: lab4-wal-service
+    ports:
+      - "8010:8010"
+    environment:
+      BUILD_VERSION: "1.4.0"
+      BUILD_SHA: "lab4-wal"
+    volumes:
+      - wal_logs:/logs
+
+  coordinator:
+    build: ./coordinator
+    container_name: lab4-coordinator
+    ports:
+      - "8000:8000"
+    depends_on:
+      - wal-service
+    environment:
+      DEFAULT_W: "2"
+      DEFAULT_R: "2"
+      VNODES_PER_SHARD: "100"
+      AUTO_REBALANCE: "true"
+      BUILD_VERSION: "1.4.0"
+      BUILD_SHA: "lab4-coord"
+
+  # --- SHARD 1 ---
+  shard-1-leader:
+    build: ./shard
+    container_name: lab4-shard-1-leader
+    depends_on: [coordinator, wal-service]
+    environment:
+      SHARD_ID: "shard-1"
+      REPLICA_ID: "shard-1-leader"
+      ROLE: "leader"
+      REPLICA_URL: "http://shard-1-leader:8001"
+      COORDINATOR_URL: "http://coordinator:8000"
+      WAL_URL: "http://wal-service:8010"
+      DB_PATH: "/data/shard.db"
+    volumes:
+      - shard1_leader_data:/data
+
+  shard-1-follower-1:
+    build: ./shard
+    container_name: lab4-shard-1-follower-1
+    depends_on: [coordinator, wal-service]
+    environment:
+      SHARD_ID: "shard-1"
+      REPLICA_ID: "shard-1-follower-1"
+      ROLE: "follower"
+      REPLICA_URL: "http://shard-1-follower-1:8001"
+      COORDINATOR_URL: "http://coordinator:8000"
+      WAL_URL: "http://wal-service:8010"
+      DB_PATH: "/data/shard.db"
+    volumes:
+      - shard1_f1_data:/data
+
+  shard-1-follower-2:
+    build: ./shard
+    container_name: lab4-shard-1-follower-2
+    depends_on: [coordinator, wal-service]
+    environment:
+      SHARD_ID: "shard-1"
+      REPLICA_ID: "shard-1-follower-2"
+      ROLE: "follower"
+      REPLICA_URL: "http://shard-1-follower-2:8001"
+      COORDINATOR_URL: "http://coordinator:8000"
+      WAL_URL: "http://wal-service:8010"
+      DB_PATH: "/data/shard.db"
+    volumes:
+      - shard1_f2_data:/data
+
+  # --- SHARD 2 ---
+  shard-2-leader:
+    build: ./shard
+    container_name: lab4-shard-2-leader
+    depends_on: [coordinator, wal-service]
+    environment:
+      SHARD_ID: "shard-2"
+      REPLICA_ID: "shard-2-leader"
+      ROLE: "leader"
+      REPLICA_URL: "http://shard-2-leader:8001"
+      COORDINATOR_URL: "http://coordinator:8000"
+      WAL_URL: "http://wal-service:8010"
+      DB_PATH: "/data/shard.db"
+    volumes:
+      - shard2_leader_data:/data
+
+  shard-2-follower-1:
+    build: ./shard
+    container_name: lab4-shard-2-follower-1
+    depends_on: [coordinator, wal-service]
+    environment:
+      SHARD_ID: "shard-2"
+      REPLICA_ID: "shard-2-follower-1"
+      ROLE: "follower"
+      REPLICA_URL: "http://shard-2-follower-1:8001"
+      COORDINATOR_URL: "http://coordinator:8000"
+      WAL_URL: "http://wal-service:8010"
+      DB_PATH: "/data/shard.db"
+    volumes:
+      - shard2_f1_data:/data
+
+  shard-2-follower-2:
+    build: ./shard
+    container_name: lab4-shard-2-follower-2
+    depends_on: [coordinator, wal-service]
+    environment:
+      SHARD_ID: "shard-2"
+      REPLICA_ID: "shard-2-follower-2"
+      ROLE: "follower"
+      REPLICA_URL: "http://shard-2-follower-2:8001"
+      COORDINATOR_URL: "http://coordinator:8000"
+      WAL_URL: "http://wal-service:8010"
+      DB_PATH: "/data/shard.db"
+    volumes:
+      - shard2_f2_data:/data
+
+  # --- SHARD 3 (для демо фонового ребалансування: docker compose --profile scale up -d) ---
+  shard-3-leader:
+    build: ./shard
+    container_name: lab4-shard-3-leader
+    profiles: ["scale"]
+    depends_on: [coordinator, wal-service]
+    environment:
+      SHARD_ID: "shard-3"
+      REPLICA_ID: "shard-3-leader"
+      ROLE: "leader"
+      REPLICA_URL: "http://shard-3-leader:8001"
+      COORDINATOR_URL: "http://coordinator:8000"
+      WAL_URL: "http://wal-service:8010"
+      DB_PATH: "/data/shard.db"
+    volumes:
+      - shard3_leader_data:/data
+
+  shard-3-follower-1:
+    build: ./shard
+    container_name: lab4-shard-3-follower-1
+    profiles: ["scale"]
+    depends_on: [coordinator, wal-service]
+    environment:
+      SHARD_ID: "shard-3"
+      REPLICA_ID: "shard-3-follower-1"
+      ROLE: "follower"
+      REPLICA_URL: "http://shard-3-follower-1:8001"
+      COORDINATOR_URL: "http://coordinator:8000"
+      WAL_URL: "http://wal-service:8010"
+      DB_PATH: "/data/shard.db"
+    volumes:
+      - shard3_f1_data:/data
+
+  shard-3-follower-2:
+    build: ./shard
+    container_name: lab4-shard-3-follower-2
+    profiles: ["scale"]
+    depends_on: [coordinator, wal-service]
+    environment:
+      SHARD_ID: "shard-3"
+      REPLICA_ID: "shard-3-follower-2"
+      ROLE: "follower"
+      REPLICA_URL: "http://shard-3-follower-2:8001"
+      COORDINATOR_URL: "http://coordinator:8000"
+      WAL_URL: "http://wal-service:8010"
+      DB_PATH: "/data/shard.db"
+    volumes:
+      - shard3_f2_data:/data
+
+  # --- OBSERVABILITY & MCP ---
+  prometheus:
+    image: prom/prometheus:v3.1.0
+    container_name: lab4-prometheus
+    ports:
+      - "9090:9090"
+    volumes:
+      - ./monitoring/prometheus/prometheus.yml:/etc/prometheus/prometheus.yml:ro
+      - ./monitoring/prometheus/alerts.yml:/etc/prometheus/alerts.yml:ro
+
+  grafana:
+    image: grafana/grafana:11.4.0
+    container_name: lab4-grafana
+    ports:
+      - "3000:3000"
+    depends_on:
+      - prometheus
+    environment:
+      GF_SECURITY_ADMIN_USER: admin
+      GF_SECURITY_ADMIN_PASSWORD: admin
+      GF_USERS_ALLOW_SIGN_UP: "false"
+    volumes:
+      - ./monitoring/grafana/provisioning:/etc/grafana/provisioning:ro
+      - ./monitoring/grafana/dashboards:/var/lib/grafana/dashboards:ro
+
+  mcp-server:
+    build: ./mcp_server
+    container_name: lab4-mcp-server
+    ports:
+      - "8020:8020"
+    depends_on:
+      - coordinator
+    environment:
+      COORDINATOR_URL: "http://coordinator:8000"
+      MCP_TRANSPORT: "streamable-http"
+      MCP_PORT: "8020"
+
+volumes:
+  wal_logs:
+  shard1_leader_data:
+  shard1_f1_data:
+  shard1_f2_data:
+  shard2_leader_data:
+  shard2_f1_data:
+  shard2_f2_data:
+  shard3_leader_data:
+  shard3_f1_data:
+  shard3_f2_data:

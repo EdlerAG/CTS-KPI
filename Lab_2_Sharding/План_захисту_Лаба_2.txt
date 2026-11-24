@@ -1,0 +1,96 @@
+====================================================================
+ПЛАН ЗАХИСТУ — ЛАБОРАТОРНА РОБОТА 2 (МІЛСТОУН 2): ШАРДИНГ
+Максимум: 15 балів (10 базовий + 5 розширений)
+====================================================================
+
+0. ПІДГОТОВКА ДО ЗАХИСТУ (обов'язково перед стартом)
+--------------------------------------------------------------------
+1) Переконайся, що не запущені контейнери Лаб 3 або 4 (вони теж на порту 8000):
+   docker ps
+   (якщо щось висить — зайди в ту папку і виконай `docker compose --profile scale down`)
+2) Запусти Лабу 2:
+   cd "D:\Потрібне\5 курс\ХТС\Lab_2_Sharding"
+   docker compose up -d --build
+3) Відкрий у браузері Swagger-документацію API:
+   http://localhost:8000/docs
+4) Тримай відкритими у редакторі файли:
+   - openapi.yaml
+   - coordinator\hashing.py
+   - coordinator\app.py
+   - shard\storage.py
+   - .github\workflows\deploy.yml
+
+
+1. ПОСЛІДОВНІСТЬ ДЕМОНСТРАЦІЇ ТА КОМАНДИ В POWERSHELL
+--------------------------------------------------------------------
+Крок А. Показати специфікацію API (2 бали):
+  - Покажи `openapi.yaml` і живу сторінку http://localhost:8000/docs.
+
+Крок Б. Показати автореєстрацію 2 шардів при старті (3 бали):
+  Invoke-RestMethod http://localhost:8000/shards
+  # Має показати: strategy="consistent", vnodes_per_shard=100, shard-1 і shard-2.
+
+Крок В. Зареєструвати таблицю зі складеним ключем (partition_key + sort_key) (+2 бали):
+  Invoke-RestMethod -Method Post http://localhost:8000/tables -ContentType "application/json" -Body '{"name":"orders","partition_key":"user_id","sort_key":"order_id"}'
+
+Крок Г. CREATE, EXISTS, READ, DELETE + шардинг запису і читання (5 балів):
+  # Створимо 2 замовлення для одного user-42 (мають піти на ОДИН шард і відсортуватися за sort_key)
+  Invoke-RestMethod -Method Post http://localhost:8000/tables/orders/records -ContentType "application/json" -Body '{"partition_key":"user-42","sort_key":"2026-11-25#002","value":{"total":300}}'
+  Invoke-RestMethod -Method Post http://localhost:8000/tables/orders/records -ContentType "application/json" -Body '{"partition_key":"user-42","sort_key":"2026-11-25#001","value":{"total":150}}'
+
+  # Створимо запис для іншого ключа, щоб показати інший шард (зверни увагу на routed_to_shard)
+  Invoke-RestMethod -Method Post http://localhost:8000/tables/orders/records -ContentType "application/json" -Body '{"partition_key":"user-7","sort_key":"2026-11-25#010","value":{"total":90}}'
+
+  # EXISTS
+  Invoke-RestMethod "http://localhost:8000/tables/orders/records/user-42/exists?sort_key=2026-11-25%23001"
+
+  # READ усіх записів за partition_key (повернуться #001, потім #002 - відсортовані!)
+  Invoke-RestMethod "http://localhost:8000/tables/orders/records/user-42"
+
+  # DELETE
+  Invoke-RestMethod -Method Delete "http://localhost:8000/tables/orders/records/user-42?sort_key=2026-11-25%23001"
+
+  # Показати через /health кожного шарда, що ключі реально розклалися по різних БД:
+  docker exec lab2-shard-1 python -c "import urllib.request; print(urllib.request.urlopen('http://localhost:8001/health').read().decode())"
+  docker exec lab2-shard-2 python -c "import urllib.request; print(urllib.request.urlopen('http://localhost:8001/health').read().decode())"
+
+Крок Д. Consistent Hashing: числа при додаванні 3-го шарда (2 бали):
+  python scripts\compare_hashing.py
+  # Покаже на 10 000 ключів: hash % N перемістив ~66.25%, ConsistentHash ~35.79%
+  # І можна наживо підняти 3-й шард:
+  docker compose --profile scale up -d shard-3
+  Invoke-RestMethod http://localhost:8000/shards
+
+Крок Е. Юніт-тести та GitHub Action (1 бал):
+  ..\.venv\Scripts\pytest.exe -v tests\test_sharding.py
+  # Покажи файл .github\workflows\deploy.yml (test -> build & push у GHCR -> SSH deploy).
+
+
+2. ЩО РОЗКАЗУВАТИ ПРИ ПОЯСНЕННІ КОДУ
+--------------------------------------------------------------------
+- `coordinator\hashing.py`:
+  - Чому SHA-256 (`stable_hash`), а не вбудований `hash()` у Python? Бо вбудований `hash()` змінюється при кожному перезапуску контейнера (`PYTHONHASHSEED`), і після рестарту координатор шукав би ключі не на тих шардах!
+  - `ConsistentHashRing`: кожен шард створює 100 точок (віртуальних вузлів) на 64-бітному кільці (`_positions` відсортовані). `bisect_right` за $O(\log N)$ знаходить найближчу точку за годинниковою стрілкою (з переходом на `0` в кінці кільця).
+- `coordinator\app.py`:
+  - `_select_shard(req.partition_key)` — зверни увагу: хешуємо ТІЛЬКИ `partition_key`, щоб усі записи одного користувача з різними `sort_key` жили на одному шарді.
+- `shard\storage.py`:
+  - SQLite з `PRAGMA journal_mode=WAL;` та складеним ключем `PRIMARY KEY (table_name, partition_key, sort_key)`.
+  - При `get(..., sort_key=None)` запит іде з `ORDER BY sort_key ASC` — це і дає впорядкування по `sort_key` усередині партиції.
+- `shard\app.py`:
+  - `_register_loop` у фоні стукає в `POST /shards/register` кожні 5 с — тому якщо координатор перезапуститься, шарди автоматично перереєструються.
+
+
+3. ШПАРГАЛКА НА КОНТРОЛЬНІ ПИТАННЯ
+--------------------------------------------------------------------
+1) Масштабування: вертикальне (більше CPU/RAM на 1 сервер, просте, але є межа і SPOF) vs горизонтальне (більше серверів/шардів, висока стеля, але складніша маршрутизація).
+2) Типи шардингу: hash-based (рівномірний розподіл, швидкі point-запити), range-based (швидкі діапазони, але ризик hot shard), directory/lookup (гнучко, але таблиця-довідник сама стає bottleneck).
+3) Consistent hashing vs `hash % N`: при `hash % N` додавання 3-го вузла до 2 змінює розташування ~67% ключів; у consistent hashing переїжджає лише ~$1/N$ (~33%), а vnodes прибирають перекіс.
+4) Як працює HashMap: масив бакетів, `hash(key) % size`, колізії через списки/open addressing, при load factor ~0.75 відбувається resize + rehashing.
+5) `partition_key` визначає шард (горизонтальний розподіл), `sort_key` сортує записи всередині партиції (швидкий range-пошук без сканування кластера).
+6) Хороший ключ: висока кардинальність і рівномірність трафіку (`user_id`, `uuid`). Якщо всі запити на один ключ (hot key), один шард ляже від 100% навантаження — лікується кешем або додаванням солі до ключа.
+
+
+4. ОЧИЩЕННЯ ПІСЛЯ ЗАХИСТУ
+--------------------------------------------------------------------
+docker compose --profile scale down -v
+====================================================================

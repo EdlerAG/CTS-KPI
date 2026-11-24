@@ -1,0 +1,105 @@
+====================================================================
+ПЛАН ЗАХИСТУ — ЛАБОРАТОРНА РОБОТА 4 (МІЛСТОУН 4): МОНІТОРИНГ, LWW, MCP
+Максимум: 15 балів (10 базовий + 5 розширений)
+====================================================================
+
+0. ПІДГОТОВКА ДО ЗАХИСТУ
+--------------------------------------------------------------------
+1) Зупини попередні лаби (щоб порт 8000 був вільний):
+   docker ps
+2) Запусти весь стек Лаби 4 (11 контейнерів: WAL, координатор, 6 реплік, Prometheus, Grafana, MCP-сервер):
+   cd "D:\Потрібне\5 курс\ХТС\Lab_4_Monitoring_MCP"
+   docker compose up -d --build
+3) Наповни графіки початковим трафіком (почекай ~10 с, поки всі репліки зареєструються):
+   Invoke-RestMethod http://localhost:8000/shards
+   ..\.venv\Scripts\python.exe scripts\generate_traffic.py
+4) Відкрий у браузері 3 вкладки:
+   - Swagger API + /health + /version: http://localhost:8000/docs
+   - Prometheus Alerts: http://localhost:9090/alerts
+   - Grafana Dashboard: http://localhost:3000 (логін: admin, пароль: admin -> Dashboards -> KV Store -> KV Store Cluster Dashboard (Lab 4))
+5) Тримай відкритими у редакторі файли:
+   - coordinator\app.py
+   - shard\storage.py
+   - monitoring\prometheus\alerts.yml
+   - mcp_server\server.py
+
+
+1. ПОСЛІДОВНІСТЬ ДЕМОНСТРАЦІЇ ТА КОМАНДИ В POWERSHELL
+--------------------------------------------------------------------
+Крок А. Health-check та версія збірки (+1 бал):
+  Invoke-RestMethod http://localhost:8000/health
+  Invoke-RestMethod http://localhost:8000/version
+  # Покажи також, що всі шарди мають /health, /version і /metrics.
+
+Крок Б. Структуровані JSON-логи з наскрізним trace_id (1 бал):
+  # Робимо запит зі своїм X-Trace-Id (або беремо з відповіді):
+  $res = Invoke-RestMethod -Method Post "http://localhost:8000/tables/telemetry_demo/records" -Headers @{"X-Trace-Id"="demo-trace-777"} -ContentType "application/json" -Body '{"partition_key":"sensor-99","value":{"temp":27}}'
+  $res
+  # Шукаємо цей самий trace_id по всіх контейнерах одночасно (coordinator -> leader -> wal -> follower):
+  docker compose logs | Select-String "demo-trace-777"
+
+Крок В. Метрики p50/p95/p99, throughput, error rate + Дашборд Grafana (4 бали):
+  # Покажи сирі метрики Prometheus на координаторі:
+  (Invoke-WebRequest http://localhost:8000/metrics).Content | Select-String "kv_http_request|kv_node_up" | Select-Object -First 20
+  # Перемкнись у браузері на Grafana (http://localhost:3000): покажи 6 панелей:
+  #   1) Стан кластера (UP/DOWN по репліках)
+  #   2) Розподіл ключів по шардах
+  #   3) p50 / p95 / p99 затримка координатора
+  #   4) RPS та помилки (ми спеціально згенерували 5 штук 404 у generate_traffic.py!)
+  #   5) і 6) Лаг реплікації в offsets та секундах.
+
+Крок Г. Версіонування + Last-Write-Wins (2 бали):
+  # Покажи LWW із явними version_ts_ns (старіший запис ts=1000 після новішого ts=2000 буде проігнорований!):
+  Invoke-RestMethod -Method Post "http://localhost:8000/tables/telemetry_demo/records" -ContentType "application/json" -Body '{"partition_key":"lww-key","value":{"v":"newer"},"version_ts_ns":2000}'
+  Invoke-RestMethod -Method Post "http://localhost:8000/tables/telemetry_demo/records" -ContentType "application/json" -Body '{"partition_key":"lww-key","value":{"v":"older"},"version_ts_ns":1000}'
+  Invoke-RestMethod "http://localhost:8000/tables/telemetry_demo/records/lww-key"
+  # Поверне {"v": "newer"} з version_ts_ns=2000!
+
+Крок Д. MCP-сервер поверх сховища (3 бали):
+  # Живий прогін через офіційний MCP-клієнт (stdio -> EXISTS / CREATE / READ / DELETE):
+  ..\.venv\Scripts\python.exe scripts\test_mcp_client.py
+  # Також можна показати MCP-сервер у Claude Code / Q CLI / Antigravity / n8n (конфіг у README.md).
+
+Крок Е. Алерт на падіння вузла (2 бали):
+  docker compose stop shard-1-follower-2
+  # Почекай ~15-20 секунд і онови http://localhost:9090/alerts -> NodeDown стане PENDING, потім FIRING!
+  # А в Grafana панель "Стан кластера" покаже DOWN червоним.
+  docker compose start shard-1-follower-2
+
+Крок Ж. Фонове ребалансування шардів (2 бали):
+  # Додаємо 3-й шард наживо — ключі автоматично переїдуть у фоні!
+  docker compose --profile scale up -d
+  Start-Sleep -Seconds 5
+  Invoke-RestMethod http://localhost:8000/admin/rebalance/status
+  # Покаже state="completed", scanned=..., moved=..., errors=0, а в Grafana зʼявиться 3-й стовпчик shard-3!
+
+Крок З. Юніт-тести:
+  ..\.venv\Scripts\pytest.exe -v tests\test_lab4.py
+
+
+2. ЩО РОЗКАЗУВАТИ ПРИ ПОЯСНЕННІ КОДУ
+--------------------------------------------------------------------
+- `coordinator\app.py`:
+  - `observability_middleware` генерує UUID `trace_id` (або бере `X-Trace-Id`), кладе його в `contextvars` для JSON-логів і прокидає в кожен HTTP-запит до шардів і WAL. Тут же рахуються `REQ_COUNTER`, `REQ_ERRORS`, `REQ_LATENCY`.
+  - `_run_rebalance`: при реєстрації лідера нового шарда (з паузою 1 с для фолловерів) сканує живі записи зі старих лідерів, перераховує `ring.get_shard(partition_key)` і переносить лише ті ключі, що змінили власника, зберігаючи `(version_ts_ns, node_id)`.
+- `shard\storage.py`:
+  - `apply_lww`: порівнює кортежі `(version_ts_ns, node_id) >= (existing_ts, existing_node)`. Видалення не стирає рядок фізично, а ставить `deleted=1` (tombstone), щоб старіші `PUT` із реплік не воскресили видалений ключ.
+- `mcp_server\server.py`:
+  - Реалізує лише 4 інструменти даних (`EXISTS`, `CREATE`, `READ`, `DELETE`) і read-only ресурс `kv://cluster/health`. Адмін-методи (`/admin/rebalance`) агентові не віддані.
+
+
+3. ШПАРГАЛКА НА КОНТРОЛЬНІ ПИТАННЯ
+--------------------------------------------------------------------
+1) Метрики RED: Rate (RPS — навантаження), Errors (4xx/5xx — збої), Duration (p50/p95/p99 — затримки) + кластерні (`kv_node_up`, `kv_replication_lag_*`, `kv_shard_keys_count`).
+2) Що показує p99: хвостову затримку (tail latency) найповільнішого 1% запитів, яку "зʼїдає" середнє значення (avg може бути 20 мс при p99 = 5000 мс).
+3) Виявлення падіння вузла: coordinator health-probe кожні 2 с (timeout 1.5 с) -> за ~3 с прибирає з читань; Prometheus scrape 5 с + `for: 15s` -> алерт NodeDown за ~15–20 с (захист від хибних спрацювань).
+4) LWW і його небезпека: при конфлікті перемагає більший timestamp. Небезпеки: 1) тиха втрата даних при конкурентних записах, 2) розсинхронізація годинників (clock skew / NTP) між вузлами.
+5) Навіщо `trace_id`: щоб зібрати шлях одного запиту крізь усі мікросервіси (координатор -> шард -> WAL) у спільних логах.
+6) Інструменти MCP: віддали `EXISTS`, `CREATE`, `READ`, `DELETE` та read-only стан кластера; не віддали керування топологією/ребалансом. Агент може видалити дані (`DELETE`), тому в проді для деструктивних дій ставлять підтвердження або RBAC.
+7) Автоскейлінг (додавання/видалення вузлів за навантаженням) vs Ребалансування (фонова міграція вже існуючих даних/ключів на нові шарди після зміни топології).
+
+
+4. ОЧИЩЕННЯ ПІСЛЯ ЗАХИСТУ
+--------------------------------------------------------------------
+docker compose --profile scale down -v
+====================================================================

@@ -1,0 +1,121 @@
+services:
+  wal-service:
+    build: ./wal_service
+    container_name: lab3-wal-service
+    ports:
+      - "8010:8010"
+    volumes:
+      - wal_logs:/logs
+
+  coordinator:
+    build: ./coordinator
+    container_name: lab3-coordinator
+    ports:
+      - "8000:8000"
+    depends_on:
+      - wal-service
+    environment:
+      DEFAULT_W: "2"
+      DEFAULT_R: "2"
+      VNODES_PER_SHARD: "100"
+
+  # --- SHARD 1 (3 replicas: 1 leader + 2 followers) ---
+  shard-1-leader:
+    build: ./shard
+    container_name: lab3-shard-1-leader
+    depends_on: [coordinator, wal-service]
+    environment:
+      SHARD_ID: "shard-1"
+      REPLICA_ID: "shard-1-leader"
+      ROLE: "leader"
+      REPLICA_URL: "http://shard-1-leader:8001"
+      COORDINATOR_URL: "http://coordinator:8000"
+      WAL_URL: "http://wal-service:8010"
+      DB_PATH: "/data/shard.db"
+    volumes:
+      - shard1_leader_data:/data
+
+  shard-1-follower-1:
+    build: ./shard
+    container_name: lab3-shard-1-follower-1
+    depends_on: [coordinator, wal-service]
+    environment:
+      SHARD_ID: "shard-1"
+      REPLICA_ID: "shard-1-follower-1"
+      ROLE: "follower"
+      REPLICA_URL: "http://shard-1-follower-1:8001"
+      COORDINATOR_URL: "http://coordinator:8000"
+      WAL_URL: "http://wal-service:8010"
+      DB_PATH: "/data/shard.db"
+    volumes:
+      - shard1_f1_data:/data
+
+  shard-1-follower-2:
+    build: ./shard
+    container_name: lab3-shard-1-follower-2
+    depends_on: [coordinator, wal-service]
+    environment:
+      SHARD_ID: "shard-1"
+      REPLICA_ID: "shard-1-follower-2"
+      ROLE: "follower"
+      REPLICA_URL: "http://shard-1-follower-2:8001"
+      COORDINATOR_URL: "http://coordinator:8000"
+      WAL_URL: "http://wal-service:8010"
+      DB_PATH: "/data/shard.db"
+    volumes:
+      - shard1_f2_data:/data
+
+  # --- SHARD 2 (3 replicas: 1 leader + 2 followers) ---
+  shard-2-leader:
+    build: ./shard
+    container_name: lab3-shard-2-leader
+    depends_on: [coordinator, wal-service]
+    environment:
+      SHARD_ID: "shard-2"
+      REPLICA_ID: "shard-2-leader"
+      ROLE: "leader"
+      REPLICA_URL: "http://shard-2-leader:8001"
+      COORDINATOR_URL: "http://coordinator:8000"
+      WAL_URL: "http://wal-service:8010"
+      DB_PATH: "/data/shard.db"
+    volumes:
+      - shard2_leader_data:/data
+
+  shard-2-follower-1:
+    build: ./shard
+    container_name: lab3-shard-2-follower-1
+    depends_on: [coordinator, wal-service]
+    environment:
+      SHARD_ID: "shard-2"
+      REPLICA_ID: "shard-2-follower-1"
+      ROLE: "follower"
+      REPLICA_URL: "http://shard-2-follower-1:8001"
+      COORDINATOR_URL: "http://coordinator:8000"
+      WAL_URL: "http://wal-service:8010"
+      DB_PATH: "/data/shard.db"
+    volumes:
+      - shard2_f1_data:/data
+
+  shard-2-follower-2:
+    build: ./shard
+    container_name: lab3-shard-2-follower-2
+    depends_on: [coordinator, wal-service]
+    environment:
+      SHARD_ID: "shard-2"
+      REPLICA_ID: "shard-2-follower-2"
+      ROLE: "follower"
+      REPLICA_URL: "http://shard-2-follower-2:8001"
+      COORDINATOR_URL: "http://coordinator:8000"
+      WAL_URL: "http://wal-service:8010"
+      DB_PATH: "/data/shard.db"
+    volumes:
+      - shard2_f2_data:/data
+
+volumes:
+  wal_logs:
+  shard1_leader_data:
+  shard1_f1_data:
+  shard1_f2_data:
+  shard2_leader_data:
+  shard2_f1_data:
+  shard2_f2_data:

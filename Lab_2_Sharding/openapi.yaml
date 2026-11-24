@@ -1,0 +1,213 @@
+openapi: 3.1.0
+info:
+  title: Distributed Key-Value Store (Lab 2 - Sharding)
+  version: 1.0.0
+  description: >
+    API специфікація координатора розподіленого key-value сховища.
+    Підтримує реєстрацію таблиць (зі складеним ключем partition_key + sort_key),
+    автоматичну реєстрацію шардів та операції EXISTS, CREATE, READ, DELETE.
+servers:
+  - url: http://localhost:8000
+    description: Local Coordinator (Docker Compose)
+
+paths:
+  /health:
+    get:
+      summary: Перевірка стану координатора
+      responses:
+        "200":
+          description: Координатор працює
+
+  /shards/register:
+    post:
+      summary: Реєстрація шарда в координаторі при старті
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/ShardRegistration"
+      responses:
+        "200":
+          description: Шард зареєстровано
+
+  /shards:
+    get:
+      summary: Список активних шардів
+      responses:
+        "200":
+          description: Перелік зареєстрованих шардів
+
+  /tables:
+    post:
+      summary: Реєстрація визначення таблиці
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/TableDefinition"
+      responses:
+        "201":
+          description: Таблицю створено
+        "409":
+          description: Таблиця вже існує
+    get:
+      summary: Отримати список таблиць
+      responses:
+        "200":
+          description: Перелік таблиць
+
+  /tables/{table_name}:
+    get:
+      summary: Отримати схему таблиці
+      parameters:
+        - name: table_name
+          in: path
+          required: true
+          schema:
+            type: string
+      responses:
+        "200":
+          description: Визначення таблиці
+        "404":
+          description: Таблицю не знайдено
+
+  /tables/{table_name}/records:
+    post:
+      summary: CREATE — створити або оновити запис за ключем
+      parameters:
+        - name: table_name
+          in: path
+          required: true
+          schema:
+            type: string
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/RecordWriteRequest"
+      responses:
+        "201":
+          description: Запис збережено на вибраному шарді
+        "400":
+          description: Невалідний ключ (наприклад, відсутній обов'язковий sort_key)
+        "404":
+          description: Таблицю не знайдено
+
+  /tables/{table_name}/records/{partition_key}:
+    get:
+      summary: READ — прочитати запис або всі записи за partition_key (відсортовані за sort_key)
+      parameters:
+        - name: table_name
+          in: path
+          required: true
+          schema:
+            type: string
+        - name: partition_key
+          in: path
+          required: true
+          schema:
+            type: string
+        - name: sort_key
+          in: query
+          required: false
+          schema:
+            type: string
+      responses:
+        "200":
+          description: Знайдений запис або список записів у межах partition_key
+        "404":
+          description: Ключ або таблицю не знайдено
+    delete:
+      summary: DELETE — видалити запис за partition_key (та опціональним sort_key)
+      parameters:
+        - name: table_name
+          in: path
+          required: true
+          schema:
+            type: string
+        - name: partition_key
+          in: path
+          required: true
+          schema:
+            type: string
+        - name: sort_key
+          in: query
+          required: false
+          schema:
+            type: string
+      responses:
+        "200":
+          description: Запис видалено
+        "404":
+          description: Ключ не знайдено
+
+  /tables/{table_name}/records/{partition_key}/exists:
+    get:
+      summary: EXISTS — перевірити наявність запису за ключем
+      parameters:
+        - name: table_name
+          in: path
+          required: true
+          schema:
+            type: string
+        - name: partition_key
+          in: path
+          required: true
+          schema:
+            type: string
+        - name: sort_key
+          in: query
+          required: false
+          schema:
+            type: string
+      responses:
+        "200":
+          description: Результат перевірки існування (`exists: true/false`)
+
+components:
+  schemas:
+    ShardRegistration:
+      type: object
+      required: [shard_id, url]
+      properties:
+        shard_id:
+          type: string
+          example: shard-1
+        url:
+          type: string
+          example: http://shard-1:8001
+
+    TableDefinition:
+      type: object
+      required: [name, partition_key]
+      properties:
+        name:
+          type: string
+          example: orders
+        partition_key:
+          type: string
+          example: user_id
+        sort_key:
+          type: string
+          nullable: true
+          example: order_id
+
+    RecordWriteRequest:
+      type: object
+      required: [partition_key, value]
+      properties:
+        partition_key:
+          type: string
+          example: user-42
+        sort_key:
+          type: string
+          nullable: true
+          example: "2026-11-25#001"
+        value:
+          description: Довільне JSON-значення
+          example:
+            total: 499.0
+            status: paid

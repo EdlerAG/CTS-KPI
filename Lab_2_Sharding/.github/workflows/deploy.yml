@@ -1,0 +1,69 @@
+name: CI/CD - Build & Deploy KV Store (Lab 2)
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - "Lab_2_Sharding/**"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  packages: write
+
+jobs:
+  test:
+    name: Run Sharding Unit Tests
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: Lab_2_Sharding
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - run: pip install pytest fastapi httpx pydantic
+      - run: pytest -v tests/test_sharding.py
+
+  build-and-push:
+    name: Build & Push Docker Images to GHCR
+    needs: test
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+      - name: Build & Push Coordinator
+        uses: docker/build-push-action@v6
+        with:
+          context: ./Lab_2_Sharding/coordinator
+          push: true
+          tags: ghcr.io/${{ github.repository_owner }}/kv-coordinator:${{ github.sha }},ghcr.io/${{ github.repository_owner }}/kv-coordinator:latest
+      - name: Build & Push Shard
+        uses: docker/build-push-action@v6
+        with:
+          context: ./Lab_2_Sharding/shard
+          push: true
+          tags: ghcr.io/${{ github.repository_owner }}/kv-shard:${{ github.sha }},ghcr.io/${{ github.repository_owner }}/kv-shard:latest
+
+  deploy:
+    name: Deploy to EC2 via SSH
+    needs: build-and-push
+    if: ${{ vars.DEPLOY_ENABLED == 'true' }}
+    runs-on: ubuntu-latest
+    steps:
+      - name: Pull & Restart Docker Compose on Remote Host
+        uses: appleboy/ssh-action@v1.2.0
+        with:
+          host: ${{ secrets.EC2_HOST }}
+          username: ${{ secrets.EC2_USER }}
+          key: ${{ secrets.EC2_SSH_KEY }}
+          script: |
+            cd ~/kv-store/Lab_2_Sharding
+            git pull origin main
+            docker compose pull
+            docker compose up -d --build
